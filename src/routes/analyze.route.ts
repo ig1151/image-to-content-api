@@ -4,7 +4,6 @@ import { analyzeSchema, batchSchema } from '../utils/validation';
 import { analyzeImage } from '../services/vision.service';
 import { createJob, getJob, updateJob } from '../services/jobs.service';
 import { config } from '../utils/config';
-import { logger } from '../utils/logger';
 import type { AnalyzeRequest, BatchRequest } from '../types/index';
 export const analyzeRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.upload.maxFileSizeMb * 1024 * 1024 }, fileFilter: (_req, file, cb) => { config.upload.allowedMimeTypes.includes(file.mimetype) ? cb(null, true) : cb(new Error(`Unsupported mime type: ${file.mimetype}`)); } });

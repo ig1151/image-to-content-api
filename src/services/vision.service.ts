@@ -18,13 +18,6 @@ function buildPrompt(modules: Module[], language: string, maxTags: number, capti
   return `Analyze this image. Return ONLY valid JSON — no markdown, no explanation.\n${langNote}\n{\n  ${fields.join(',\n  ')}\n}`;
 }
 
-function resolveImageSource(image: string, format?: string) {
-  if (image.startsWith('https://')) return { type: 'url' as const, url: image };
-  const raw = image.includes(',') ? image.split(',')[1] : image;
-  const mimeMap: Record<string, string> = { jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
-  return { type: 'base64' as const, media_type: mimeMap[format ?? 'jpeg'] ?? 'image/jpeg', data: raw };
-}
-
 export async function analyzeImage(req: AnalyzeRequest): Promise<AnalyzeResponse> {
   const id = `req_${uuidv4().replace(/-/g, '').slice(0, 12)}`;
   const modules = req.modules ?? ['caption', 'summary', 'tags', 'metadata'];
@@ -32,33 +25,62 @@ export async function analyzeImage(req: AnalyzeRequest): Promise<AnalyzeResponse
   const maxTags = req.max_tags ?? 10;
   const captionStyle = req.caption_style ?? 'detailed';
   const t0 = Date.now();
-  const imageSource = resolveImageSource(req.image, req.image_format);
+
   logger.info({ id, modules }, 'Starting analysis');
 
-  const imageContent: Anthropic.ImageBlockParam = imageSource.type === 'url'
-    ? { type: 'image', source: { type: 'url', url: imageSource.url } }
-    : { type: 'image', source: { type: 'base64', media_type: imageSource.media_type as Anthropic.Base64ImageSource['media_type'], data: imageSource.data } };
+  const image = req.image;
+  let messageContent: Anthropic.MessageParam['content'];
+
+  if (image.startsWith('https://')) {
+    messageContent = [
+      {
+        type: 'image',
+        source: { type: 'url', url: image },
+      } as unknown as Anthropic.ImageBlockParam,
+      { type: 'text', text: buildPrompt(modules, language, maxTags, captionStyle) },
+    ];
+  } else {
+    const raw = image.includes(',') ? image.split(',')[1] : image;
+    const mimeMap: Record<string, 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'> = {
+      jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+    };
+    const mediaType = mimeMap[req.image_format ?? 'jpeg'] ?? 'image/jpeg';
+    messageContent = [
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data: raw },
+      },
+      { type: 'text', text: buildPrompt(modules, language, maxTags, captionStyle) },
+    ];
+  }
 
   const response = await client.messages.create({
     model: config.anthropic.model,
     max_tokens: 1024,
-    messages: [{ role: 'user', content: [imageContent, { type: 'text', text: buildPrompt(modules, language, maxTags, captionStyle) }] }],
+    messages: [{ role: 'user', content: messageContent }],
   });
 
-  const raw = response.content.find((b) => b.type === 'text')?.text ?? '{}';
+  const rawText = response.content.find((b) => b.type === 'text')?.text ?? '{}';
   let parsed: Record<string, unknown>;
-  try { parsed = JSON.parse(raw.replace(/```json|```/g, '').trim()); }
-  catch (err) { logger.error({ id, raw, err }, 'Failed to parse JSON'); throw new Error('Model returned malformed JSON'); }
+  try {
+    parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+  } catch (err) {
+    logger.error({ id, rawText, err }, 'Failed to parse JSON');
+    throw new Error('Model returned malformed JSON');
+  }
 
   logger.info({ id, latency: Date.now() - t0 }, 'Analysis complete');
+
   return {
-    id, status: 'success', model: config.anthropic.model,
-    ...(parsed.caption && { caption: parsed.caption as AnalyzeResponse['caption'] }),
-    ...(parsed.summary && { summary: parsed.summary as AnalyzeResponse['summary'] }),
-    ...(parsed.tags && { tags: parsed.tags as AnalyzeResponse['tags'] }),
-    ...(parsed.metadata && { metadata: parsed.metadata as AnalyzeResponse['metadata'] }),
-    ...(parsed.sentiment && { sentiment: parsed.sentiment as AnalyzeResponse['sentiment'] }),
-    ...(parsed.ocr && { ocr: parsed.ocr as AnalyzeResponse['ocr'] }),
+    id,
+    status: 'success',
+    model: config.anthropic.model,
+    ...(parsed.caption ? { caption: parsed.caption as AnalyzeResponse['caption'] } : {}),
+    ...(parsed.summary ? { summary: parsed.summary as AnalyzeResponse['summary'] } : {}),
+    ...(parsed.tags ? { tags: parsed.tags as AnalyzeResponse['tags'] } : {}),
+    ...(parsed.metadata ? { metadata: parsed.metadata as AnalyzeResponse['metadata'] } : {}),
+    ...(parsed.sentiment ? { sentiment: parsed.sentiment as AnalyzeResponse['sentiment'] } : {}),
+    ...(parsed.ocr ? { ocr: parsed.ocr as AnalyzeResponse['ocr'] } : {}),
     latency_ms: Date.now() - t0,
     usage: { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens },
     created_at: new Date().toISOString(),
