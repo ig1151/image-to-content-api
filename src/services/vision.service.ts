@@ -14,6 +14,7 @@ function buildPrompt(modules: Module[], language: string, maxTags: number, capti
   if (modules.includes('metadata')) fields.push(`"metadata": { "scene_type": "<scene>", "setting": "<indoor|outdoor|studio|unknown>", "time_of_day": "<morning|afternoon|evening|night|unknown>", "dominant_colors": ["<c1>","<c2>","<c3>"], "objects_detected": ["<o1>","<o2>"], "people_count": <int>, "has_text": <bool>, "aspect_ratio_guess": "<landscape|portrait|square>" }`);
   if (modules.includes('sentiment')) fields.push(`"sentiment": { "tone": "<positive|neutral|negative|mixed>", "score": <-1.0 to 1.0>, "emotions": ["<e1>","<e2>"] }`);
   if (modules.includes('ocr')) fields.push(`"ocr": { "text": "<extracted text or empty>", "blocks": [{ "text": "<t>", "confidence": <0.0-1.0> }], "language_detected": "<BCP-47>" }`);
+  if (modules.includes('faces')) fields.push('"faces": { "count": <integer>, "details": [{ "emotion": "<happy|sad|angry|surprised|neutral|fearful|disgusted>", "age_range": "<18-24|25-34|35-44|45-54|55-64|65+>", "gender": "<male|female|unknown>", "lighting_quality": "<excellent|good|fair|poor>", "is_looking_at_camera": <boolean> }], "profile_score": <integer 0-100>, "profile_suggestions": ["<suggestion1>", "<suggestion2>"], "suitable_for_professional": <boolean>, "suitable_for_social": <boolean> }');
   const langNote = language !== 'en' ? `Output all human-readable strings in language: ${language}.\n` : '';
   return `Analyze this image. Return ONLY valid JSON — no markdown, no explanation.\n${langNote}\n{\n  ${fields.join(',\n  ')}\n}`;
 }
@@ -81,6 +82,7 @@ export async function analyzeImage(req: AnalyzeRequest): Promise<AnalyzeResponse
     ...(parsed.metadata ? { metadata: parsed.metadata as AnalyzeResponse['metadata'] } : {}),
     ...(parsed.sentiment ? { sentiment: parsed.sentiment as AnalyzeResponse['sentiment'] } : {}),
     ...(parsed.ocr ? { ocr: parsed.ocr as AnalyzeResponse['ocr'] } : {}),
+    ...(parsed.faces ? { faces: parsed.faces as AnalyzeResponse['faces'] } : {}),
     latency_ms: Date.now() - t0,
     usage: { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens },
     created_at: new Date().toISOString(),

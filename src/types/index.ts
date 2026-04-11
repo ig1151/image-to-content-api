@@ -1,4 +1,4 @@
-export type Module = 'caption' | 'summary' | 'tags' | 'metadata' | 'sentiment' | 'ocr';
+export type Module = 'caption' | 'summary' | 'tags' | 'metadata' | 'sentiment' | 'ocr' | 'faces';
 export type CaptionStyle = 'brief' | 'detailed' | 'alt-text';
 export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif';
 export type JobStatus = 'pending' | 'processing' | 'success' | 'error';
@@ -24,6 +24,22 @@ export interface SentimentResult { tone: Tone; score: number; emotions: string[]
 export interface OcrBlock { text: string; confidence: number; }
 export interface OcrResult { text: string; blocks: OcrBlock[]; language_detected: string; }
 export interface UsageResult { input_tokens: number; output_tokens: number; }
-export interface AnalyzeResponse { id: string; status: JobStatus; model: string; caption?: CaptionResult; summary?: SummaryResult; tags?: TagResult[]; metadata?: MetadataResult; sentiment?: SentimentResult; ocr?: OcrResult; latency_ms: number; usage: UsageResult; created_at: string; }
+export interface FaceDetail {
+  emotion: string;
+  age_range: string;
+  gender: string;
+  lighting_quality: 'excellent' | 'good' | 'fair' | 'poor';
+  is_looking_at_camera: boolean;
+}
+
+export interface FacesResult {
+  count: number;
+  details: FaceDetail[];
+  profile_score?: number;
+  profile_suggestions?: string[];
+  suitable_for_professional?: boolean;
+  suitable_for_social?: boolean;
+}
+export interface AnalyzeResponse { id: string; status: JobStatus; model: string; caption?: CaptionResult; summary?: SummaryResult; tags?: TagResult[]; metadata?: MetadataResult; sentiment?: SentimentResult; ocr?: OcrResult; faces?: FacesResult; latency_ms: number; usage: UsageResult; created_at: string; }
 export interface Job { job_id: string; status: JobStatus; created_at: string; completed_at?: string; result?: AnalyzeResponse; error?: string; }
 export interface BatchRequest { images: AnalyzeRequest[]; }
