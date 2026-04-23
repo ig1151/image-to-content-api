@@ -1,10 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
-import { config } from '../utils/config';
 import { logger } from '../utils/logger';
 import type { AnalyzeRequest, AnalyzeResponse, Module, CaptionStyle } from '../types/index';
 
-const client = new Anthropic({ apiKey: config.anthropic.apiKey });
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const MODEL = 'anthropic/claude-sonnet-4-5';
 
 function buildPrompt(modules: Module[], language: string, maxTags: number, captionStyle: CaptionStyle): string {
   const fields: string[] = [];
@@ -26,42 +25,54 @@ export async function analyzeImage(req: AnalyzeRequest): Promise<AnalyzeResponse
   const maxTags = req.max_tags ?? 10;
   const captionStyle = req.caption_style ?? 'detailed';
   const t0 = Date.now();
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY not set');
 
   logger.info({ id, modules }, 'Starting analysis');
 
   const image = req.image;
-  let messageContent: Anthropic.MessageParam['content'];
+  const promptText = buildPrompt(modules, language, maxTags, captionStyle);
 
+  let imageContent: unknown;
   if (image.startsWith('https://')) {
-    messageContent = [
-      {
-        type: 'image',
-        source: { type: 'url', url: image },
-      } as unknown as Anthropic.ImageBlockParam,
-      { type: 'text', text: buildPrompt(modules, language, maxTags, captionStyle) },
-    ];
+    imageContent = { type: 'image_url', image_url: { url: image } };
   } else {
     const raw = image.includes(',') ? image.split(',')[1] : image;
-    const mimeMap: Record<string, 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'> = {
+    const mimeMap: Record<string, string> = {
       jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
     };
     const mediaType = mimeMap[req.image_format ?? 'jpeg'] ?? 'image/jpeg';
-    messageContent = [
-      {
-        type: 'image',
-        source: { type: 'base64', media_type: mediaType, data: raw },
-      },
-      { type: 'text', text: buildPrompt(modules, language, maxTags, captionStyle) },
-    ];
+    imageContent = { type: 'image_url', image_url: { url: `data:${mediaType};base64,${raw}` } };
   }
 
-  const response = await client.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: messageContent }],
+  const response = await fetch(OPENROUTER_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          imageContent,
+          { type: 'text', text: promptText },
+        ],
+      }],
+      response_format: { type: 'json_object' },
+    }),
   });
 
-  const rawText = response.content.find((b) => b.type === 'text')?.text ?? '{}';
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenRouter error: ${response.status} ${err}`);
+  }
+
+  const data = await response.json() as { choices: { message: { content: string } }[], usage: { prompt_tokens: number; completion_tokens: number } };
+  const rawText = data.choices[0].message.content ?? '{}';
+
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
@@ -75,7 +86,7 @@ export async function analyzeImage(req: AnalyzeRequest): Promise<AnalyzeResponse
   return {
     id,
     status: 'success',
-    model: config.anthropic.model,
+    model: MODEL,
     ...(parsed.caption ? { caption: parsed.caption as AnalyzeResponse['caption'] } : {}),
     ...(parsed.summary ? { summary: parsed.summary as AnalyzeResponse['summary'] } : {}),
     ...(parsed.tags ? { tags: parsed.tags as AnalyzeResponse['tags'] } : {}),
@@ -84,7 +95,7 @@ export async function analyzeImage(req: AnalyzeRequest): Promise<AnalyzeResponse
     ...(parsed.ocr ? { ocr: parsed.ocr as AnalyzeResponse['ocr'] } : {}),
     ...(parsed.faces ? { faces: parsed.faces as AnalyzeResponse['faces'] } : {}),
     latency_ms: Date.now() - t0,
-    usage: { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens },
+    usage: { input_tokens: data.usage.prompt_tokens, output_tokens: data.usage.completion_tokens },
     created_at: new Date().toISOString(),
   };
 }
